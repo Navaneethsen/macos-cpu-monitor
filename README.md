@@ -4,260 +4,260 @@ A lightweight background service for macOS that monitors specific processes for 
 
 [Medium Blog Post](https://navaneethsen.medium.com/from-manual-screenshots-to-automated-evidence-building-a-smart-macos-cpu-monitor-3b4ada892790)
 
-
 ## Features
 
-- **Background Operation**: Runs silently in the background with minimal CPU usage
-- **Auto-Start**: Automatically starts at login
-- **Median-Based Detection**: Uses 5-minute median CPU usage to avoid false positives from temporary spikes
-- **Data-Only Evidence**: Captures detailed JSON and text reports (screenshots disabled for locked screen compatibility)
+- **Individual Process Tracking**: Each process instance tracked separately by PID and command line
+- **Dynamic Configuration**: Modify settings without restarting the service
+- **Median-Based Detection**: Uses 5-minute median CPU usage to avoid false positives
+- **Auto-Start**: Automatically starts at login and runs in background
+- **Evidence Collection**: Saves detailed JSON data and text reports when alerts trigger
 - **Comprehensive Logging**: Detailed logs with hourly status updates
-- **Evidence Collection**: Saves JSON data and text reports when alerts trigger
 
-## Quick Start
+## Quick Setup
 
 ### Prerequisites
+- **macOS** with **Python 3.6+** (built-in)
+- **No external dependencies** required
 
-- **Python 3.6+**: The script uses f-strings and pathlib (built into Python 3.6+)
-- **macOS**: Designed specifically for macOS with Activity Monitor integration
-- **No external dependencies**: Uses only Python standard library modules
+### 1. Installation
 
-### Installation
+```bash
+cd macos-cpu-monitor
+./install_service.sh
+```
 
-1. **Update file paths in the plist configuration:**
-   - Open `com.user.cpumonitor.plist` in a text editor
-   - Update all file paths to match your actual repository location
-   - Replace `/<root_folder>/macos-cpu-monitor/` with your actual path
-   - Example: If you downloaded to `/Users/yourname/Downloads/macos-cpu-monitor/`, update all paths accordingly
+### 2. Grant Permissions
+- Go to **System Preferences** > **Security & Privacy** > **Privacy** > **Accessibility**
+- Click the lock icon and enter your password
+- Click **+** and add **Python** (`/usr/bin/python3`)
+- Ensure Python is checked/enabled
 
-2. **Grant Python permissions:**
-   - Go to **System Preferences** > **Security & Privacy** > **Privacy**
-   - Select **Accessibility** from the left sidebar
-   - Click the lock icon and enter your password
-   - Click the **+** button and add **Python** (usually located at `/usr/bin/python3`)
-   - Ensure Python is checked/enabled in the list
-   - This allows Python to control Activity Monitor for screenshots
+### 3. Verify Installation
+```bash
+launchctl list | grep com.user.cpumonitor
+```
 
-3. **Install the service:**
-   ```bash
-   cd macos-cpu-monitor
-   ./install_service.sh
-   ```
-
-4. **Verify installation:**
-   ```bash
-   launchctl list | grep com.user.cpumonitor
-   ```
-
-### Uninstallation
-
+### 4. Uninstall (if needed)
 ```bash
 ./uninstall_service.sh
 ```
 
 ## Configuration
 
-### Monitored Processes
+### Option 1: JSON Configuration File (Recommended)
 
-Edit `run_cpu_anlayser.py` to modify the `PROCESS_NAMES` list:
+Create a `config.json` file for dynamic configuration:
+
+```json
+{
+  "process_names": [
+    "chrome",
+    "java",
+    "python",
+    "suspicious_app"
+  ],
+  "cpu_threshold": 95.0,
+  "check_interval": 30,
+  "monitoring_window": 300,
+  "evidence_folder": "cpu_evidence",
+  "log_file": "cpu_monitor.log"
+}
+```
+
+**Configuration Parameters:**
+- `process_names`: Array of process names to monitor
+- `cpu_threshold`: CPU usage percentage threshold (0-100)
+- `check_interval`: Seconds between CPU checks
+- `monitoring_window`: Time window in seconds for median calculation
+- `evidence_folder`: Directory to store evidence files
+- `log_file`: Log file path
+
+### Option 2: Direct Script Modification
+
+Edit `run_cpu_anlayser.py`:
 
 ```python
 PROCESS_NAMES = [
     "abcd_enterprise",
     "silverbullet", 
     "com.xyz.SecurityExtension",
-    "1234daemon",
-    "fryGPS"  
-    ... # Add more as needed
+    "suspicious_daemon"
 ]
+
+CPU_THRESHOLD = 95.0       # Percentage threshold
+CHECK_INTERVAL = 30        # Seconds between checks
+MONITORING_WINDOW = 300    # 5 minutes for median calculation
 ```
 
-### Thresholds and Timing
+### Dynamic Configuration Updates
 
-```python
-CPU_THRESHOLD = 95.0       # Percentage threshold for median CPU usage
-CHECK_INTERVAL = 30        # Seconds between CPU checks
-MONITORING_WINDOW = 300    # Seconds (5 minutes) for median calculation
+The monitor automatically reloads `config.json` every 60 seconds. You can also use the utility script:
+
+```bash
+# Show current configuration
+python update_config.py show
+
+# Update CPU threshold to 80%
+python update_config.py threshold 80
+
+# Add a new process to monitor
+python update_config.py add-process "new_daemon"
+
+# Remove a process from monitoring
+python update_config.py remove-process "old_process"
 ```
 
 ## How It Works
 
-1. **Data Collection**: Every 30 seconds, the service checks CPU usage of each monitored process individually
-2. **Rolling Window**: Maintains separate 5-minute rolling windows for each process
-3. **Median Analysis**: Calculates median CPU usage for each process over the monitoring window
-4. **Alert Trigger**: Triggers when ANY individual process median exceeds threshold (default: 95%)
-5. **Evidence Capture**:
-   - Saves detailed JSON data with per-process statistics
-   - Creates human-readable report showing which processes triggered the alert
-   - Captures system CPU information using `top` command
+### Individual Process Tracking
+Each process instance is monitored separately:
+- **Unique Identification**: `process_name:pid:full_command`
+- **Independent Monitoring**: Each instance has its own CPU threshold monitoring
+- **Command Differentiation**: Processes with same name but different arguments tracked separately
 
-## File Structure
+**Example**: Multiple Chrome processes are tracked individually:
+```
+chrome:1234:/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer
+chrome:1235:/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=gpu-process
+```
 
+### Monitoring Process
+1. **Data Collection**: Every 30 seconds, checks CPU usage of each monitored process
+2. **Rolling Window**: Maintains 5-minute rolling windows per process instance
+3. **Median Analysis**: Calculates median CPU usage for each process over monitoring window
+4. **Alert Trigger**: Triggers when ANY process instance median exceeds threshold
+
+## Evidence and Logs
+
+### File Structure
 ```
 macos-cpu-monitor/
-├── run_cpu_anlayser.py          # Main monitoring script
-├── com.user.cpumonitor.plist    # LaunchAgent configuration
-├── install_service.sh           # Installation script
-├── uninstall_service.sh         # Uninstallation script
-├── README.md                    # This file
-├── cpu_monitor.log              # Main log file
-├── cpu_monitor_stdout.log       # Standard output log
-├── cpu_monitor_stderr.log       # Error log
-└── cpu_evidence/                # Evidence folder (Hive partition structure)
-    └── 2025/                    # Year
-        └── 06/                  # Month
-            └── 19/              # Day
-                └── 21/          # Hour
-                    ├── cpu_data_20250619_213511.json
-                    └── report_20250619_213511.txt
+├── config.json                 # Configuration file
+├── run_cpu_anlayser.py         # Main script
+├── cpu_monitor.log             # Main log file
+└── cpu_evidence/               # Evidence folder
+    └── 2025/06/19/21/         # Hive partition (yyyy/mm/dd/hh)
+        ├── cpu_data_20250619_213511.json
+        └── report_20250619_213511.txt
 ```
 
-## Log Files
-
-### Main Log (`cpu_monitor.log`)
-- Startup messages
-- Hourly status updates
-- Alert notifications
-- Error messages
+### Alert Format
+```
+HIGH CPU ALERT! Individual process instances exceeding 95.0% median over 300s:
+  chrome (PID: 1234): Current: 98.5%, Median: 96.2%
+    Command: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer
+  java (PID: 5678): Current: 97.1%, Median: 95.8%
+    Command: java -Xmx2g -jar myapp.jar --spring.profiles.active=production
+```
 
 ### Evidence Files
-When an alert triggers, files are created in Hive partition structure (yyyy/mm/dd/hh):
-
 1. **JSON Data** (`cpu_data_YYYYMMDD_HHMMSS.json`):
-   - Current and median CPU usage per process
-   - All individual readings for triggering processes
-   - Statistical analysis (min, max, average)
-   - Process details and PIDs
-   - System CPU information from `top` command
+   - Individual process CPU readings and medians
+   - Complete command lines and PIDs
+   - Statistical analysis per process instance
 
 2. **Text Report** (`report_YYYYMMDD_HHMMSS.txt`):
    - Human-readable summary with visual indicators
    - Individual process statistics (⚠️ ALERT vs ✅ Normal)
-   - Complete 5-minute reading history for triggering processes
-   - Current process details with PIDs and commands
+   - 5-minute reading history for each triggering process
 
 ## Service Management
 
-### Check Service Status
+### Check Status
 ```bash
 launchctl list | grep com.user.cpumonitor
 ```
 
-### View Live Logs
+### View Logs
 ```bash
-tail -f macos_cpu_anlayser/cpu_monitor.log
+tail -f cpu_monitor.log
 ```
 
-### Manual Start/Stop
+### Manual Control
 ```bash
-# Stop
+# Stop service
 launchctl unload ~/Library/LaunchAgents/com.user.cpumonitor.plist
 
-# Start
+# Start service
 launchctl load ~/Library/LaunchAgents/com.user.cpumonitor.plist
-```
 
-### Force Restart
-```bash
+# Restart service
 launchctl unload ~/Library/LaunchAgents/com.user.cpumonitor.plist
 launchctl load ~/Library/LaunchAgents/com.user.cpumonitor.plist
 ```
-
-## Performance Optimization
-
-The service is optimized for minimal system impact:
-
-- **Low Priority**: Runs with `Nice` value of 10 (lower priority)
-- **Background Process**: Marked as background type in LaunchAgent
-- **Reduced Logging**: Only logs warnings/errors and hourly status
-- **Efficient Memory**: Uses deque for rolling window with size limits
-- **I/O Throttling**: Low priority I/O operations
 
 ## Troubleshooting
 
 ### Service Won't Start
-1. Check permissions:
+1. **Check file paths in plist:**
    ```bash
-   ls -la ~/Library/LaunchAgents/com.user.cpumonitor.plist
+   # Edit plist file to match your actual repository path
+   nano com.user.cpumonitor.plist
+   # Replace placeholder paths with your actual path
    ```
 
-2. Check error logs:
-   ```bash
-   cat macos-cpu-monitor/cpu_monitor_stderr.log
-   ```
-
-3. Verify Python path:
+2. **Verify Python path:**
    ```bash
    which python3
    ```
 
-### No Screenshots or Screenshots Show Desktop Only
-- **Ensure Python has accessibility permissions:**
-  - Go to System Preferences > Security & Privacy > Privacy > Accessibility
-  - Add Python (`/usr/bin/python3`) to the list and enable it
-  - You may also need to add Terminal if running the script from Terminal
-- **Check for permission prompts:**
-  - macOS may show permission dialogs when the script first tries to control Activity Monitor
-  - Look for system dialogs asking for accessibility permissions
-- **Verify Activity Monitor behavior:**
-  - Test manually: Open Activity Monitor, press `Ctrl+Cmd+F` to enter full screen
-  - If this doesn't work, Activity Monitor may not support full screen on your macOS version
-- **Alternative screenshot methods:**
-  - If full screen doesn't work, the script will still capture the desktop
-  - Check the log files for AppleScript errors that might indicate permission issues
-
-### Plist File Path Issues
-1. **Update plist file paths before installation:**
+3. **Check error logs:**
    ```bash
-   # Edit the plist file to match your actual path
-   nano com.user.cpumonitor.plist
-   # Replace all instances of the placeholder path with your actual path
+   cat cpu_monitor_stderr.log
    ```
 
-2. **Common path locations:**
-   - Downloaded to Desktop: `/Users/yourusername/Desktop/macos-cpu-monitor/`
-   - Downloaded to Downloads: `/Users/yourusername/Downloads/macos-cpu-monitor/`
-   - Cloned to home: `/Users/yourusername/macos-cpu-monitor/`
+### Permission Issues
+- Ensure Python has **Accessibility** permissions in System Preferences
+- Check for permission dialog prompts when first running
+- Verify write permissions in evidence folder
 
-3. **Verify paths are correct:**
-   ```bash
-   # Check if the Python script exists at the path specified in plist
-   ls -la /path/to/your/macos-cpu-monitor/run_cpu_anlayser.py
-   ```
+### Configuration Issues
+- JSON syntax must be valid
+- CPU threshold must be 0-100
+- Time intervals must be positive integers
+- Invalid configs will log warnings and use previous valid settings
 
-### High CPU Usage
-- Increase `CHECK_INTERVAL` to reduce frequency
-- Check if other processes are interfering
+### Performance Issues
+- Increase `check_interval` to reduce CPU usage
+- Service runs with low priority (Nice value 10)
+- Uses efficient memory management with size-limited rolling windows
 
-### Missing Evidence
-- Verify write permissions in the evidence folder
-- Check available disk space
+## Examples
 
-## Security Considerations
+### Monitoring Multiple Java Applications
+```json
+{
+  "process_names": ["java"],
+  "cpu_threshold": 90.0,
+  "check_interval": 60
+}
+```
 
-- The service runs with user privileges (not root)
-- All files are created with user permissions
-- No network connections are made
+This will separately track:
+- `java:5678:java -Xmx2g -jar app1.jar`
+- `java:5679:java -Xmx4g -jar app2.jar --config=prod`
+
+### Security Monitoring
+```json
+{
+  "process_names": [
+    "SecurityExtension",
+    "suspicious_daemon",
+    "crypto_miner"
+  ],
+  "cpu_threshold": 80.0,
+  "check_interval": 15
+}
+```
+
+## Security Notes
+
+- Runs with user privileges (not root)
+- No network connections made
+- All data stored locally
 - Only monitors specified processes
-- Screenshots are stored locally
+- Files created with user permissions
 
-## Customization
+---
 
-### Adding New Processes
-Add process names to the `PROCESS_NAMES` list. Use partial matches (case-insensitive).
-
-### Changing Alert Behavior
-Modify the `monitor()` method to customize:
-- Alert frequency
-- Evidence collection
-- Notification methods
-
-### Custom Reports
-Extend the `create_summary_report_with_median()` method for additional data.
-
-## Support
-
-For issues or questions:
-1. Check the log files first
-2. Verify service status with `launchctl list`
-3. Test manual execution: `python3 run_cpu_anlayser.py`
+**Ready to start monitoring!** The service will automatically begin tracking your configured processes and alert you when any individual process instance sustains high CPU usage.
