@@ -54,7 +54,7 @@ if launchctl list | grep -q "$SERVICE_NAME"; then
     echo "🔍 Monitor Status:"
     echo "   - The service will automatically start at login"
     echo "   - It runs in the background with low CPU priority"
-    echo "   - Status updates are logged every hour"
+    echo "   - Status updates are logged every 5 minutes"
     echo "   - Alerts trigger when median CPU > 95% over 5 minutes"
     echo ""
     echo "📝 Management Commands:"
