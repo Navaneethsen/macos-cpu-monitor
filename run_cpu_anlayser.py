@@ -138,7 +138,7 @@ def load_config(config_path="config.json"):
 class CPUMonitor:
     """Ultra-lightweight CPU monitor with minimal memory usage"""
     __slots__ = ('config_path', 'config_last_modified', 'process_readings', 
-                 'process_window_start', 'config', 'process_names', 'cpu_threshold',
+                 'process_window_start', 'process_last_alert', 'config', 'process_names', 'cpu_threshold',
                  'check_interval', 'monitoring_window', 'percentile', 'evidence_folder', 'log_file',
                  'max_readings', '_process_name_cache', '_weak_refs')
     
@@ -149,6 +149,7 @@ class CPUMonitor:
         # Use circular buffers for memory efficiency
         self.process_readings = {}
         self.process_window_start = {}
+        self.process_last_alert = {}
         
         # Cache for process name matching to avoid repeated string operations
         self._process_name_cache = {}
@@ -514,35 +515,48 @@ class CPUMonitor:
                     if self.process_window_start[process_name] is None:
                         self.process_window_start[process_name] = timestamp
                 
-                # Calculate percentile values and check thresholds
-                process_percentiles = {}
-                triggering_processes = []
+                # Check if any monitoring window is complete for evaluation
+                window_complete = False
+                completed_processes = []
                 
                 for process_name in self.process_names:
                     if process_name in self.process_readings:
-                        buffer = self.process_readings[process_name]
                         window_start = self.process_window_start[process_name]
-                        
                         if window_start and (timestamp - window_start) >= self.monitoring_window:
-                            # Get values within monitoring window
-                            values = buffer.get_recent_values(self.monitoring_window, timestamp)
+                            window_complete = True
+                            completed_processes.append(process_name)
+                
+                # Only evaluate and potentially alert when window is complete
+                process_percentiles = {}
+                triggering_processes = []
+                
+                if window_complete:
+                    logging.info(f"Monitoring window complete. Evaluating {len(completed_processes)} processes...")
+                    
+                    for process_name in completed_processes:
+                        buffer = self.process_readings[process_name]
+                        
+                        # Get values within the completed monitoring window
+                        values = buffer.get_recent_values(self.monitoring_window, timestamp)
+                        
+                        if len(values) >= 10:  # Need minimum readings for statistical analysis
+                            # Calculate configured percentile
+                            percentile_cpu = statistics.quantiles(values, n=100)[self.percentile - 1]
+                            process_percentiles[process_name] = percentile_cpu
                             
-                            if len(values) >= 10:  # Need minimum readings
-                                # Calculate configured percentile
-                                percentile_cpu = statistics.quantiles(values, n=100)[self.percentile - 1]
-                                process_percentiles[process_name] = percentile_cpu
-                                
-                                if percentile_cpu >= self.cpu_threshold:
-                                    triggering_processes.append(process_name)
-                            else:
-                                process_percentiles[process_name] = 0.0
+                            logging.info(f"  {process_name}: P{self.percentile} = {percentile_cpu:.1f}% (threshold: {self.cpu_threshold}%)")
+                            
+                            if percentile_cpu >= self.cpu_threshold:
+                                triggering_processes.append(process_name)
                         else:
-                            # Still in monitoring window
-                            values = buffer.get_values()
-                            if values:
-                                process_percentiles[process_name] = statistics.quantiles(values, n=100)[self.percentile - 1]
-                            else:
-                                process_percentiles[process_name] = 0.0
+                            process_percentiles[process_name] = 0.0
+                            logging.info(f"  {process_name}: Insufficient data ({len(values)} samples)")
+                    
+                    # Reset monitoring windows for all completed processes (whether they triggered or not)
+                    for process_name in completed_processes:
+                        self.process_readings[process_name].clear()
+                        self.process_window_start[process_name] = timestamp
+                        logging.info(f"  Reset monitoring window for {process_name}")
                 
                 # Handle alerts
                 if triggering_processes:
