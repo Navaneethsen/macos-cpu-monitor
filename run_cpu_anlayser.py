@@ -305,17 +305,60 @@ class CPUMonitor:
                 return {}, time.time()
     
     def get_detailed_cpu_info(self):
-        """Get minimal CPU info to reduce memory usage"""
+        """Get system CPU info using ps command for more reliable data"""
         try:
-            # Get only essential CPU info
+            # Use ps command which gives immediate accurate results
             result = subprocess.run(
-                ["top", "-l", "1", "-n", "5", "-o", "cpu"],  # Top 5 CPU processes only
+                ["ps", "aux", "-r"],  # -r sorts by CPU usage (highest first)
                 capture_output=True, text=True, check=True, timeout=5
             )
-            # Return only first 1000 characters to limit memory usage
-            return result.stdout[:1000]
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return "CPU info unavailable"
+            
+            if result.stdout:
+                lines = result.stdout.split('\n')
+                # Take header + top 10 processes
+                top_processes = lines[:11] if len(lines) > 11 else lines
+                
+                # Format the output nicely
+                formatted_output = "Top CPU Processes (ps aux -r):\n"
+                formatted_output += "=" * 60 + "\n"
+                
+                for i, line in enumerate(top_processes):
+                    if i == 0:  # Header
+                        formatted_output += f"{line}\n"
+                        formatted_output += "-" * 60 + "\n"
+                    elif line.strip():  # Process lines
+                        # Limit line length to prevent very long output
+                        formatted_output += f"{line[:120]}\n"
+                
+                # Add system load information
+                try:
+                    uptime_result = subprocess.run(
+                        ["uptime"], capture_output=True, text=True, check=True, timeout=2
+                    )
+                    if uptime_result.stdout:
+                        formatted_output += "\n" + "=" * 60 + "\n"
+                        formatted_output += f"System Load: {uptime_result.stdout.strip()}\n"
+                except:
+                    pass
+                
+                return formatted_output[:1500]  # Limit total size
+            else:
+                return "No process information available"
+                
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            # Fallback to basic ps command
+            try:
+                result = subprocess.run(
+                    ["ps", "-eo", "pid,pcpu,pmem,comm", "-r"],
+                    capture_output=True, text=True, check=True, timeout=3
+                )
+                if result.stdout:
+                    lines = result.stdout.split('\n')[:11]  # Header + top 10
+                    return "Top CPU Processes (fallback):\n" + "\n".join(lines)[:1000]
+            except:
+                pass
+            
+            return f"CPU info unavailable: {str(e)}"
     
     def save_cpu_data_minimal(self, processes, process_medians, triggering_processes, 
                              detailed_info, timestamp_str):
@@ -374,7 +417,7 @@ class CPUMonitor:
         
         return str(report_path)
     
-    def create_full_report(self, processes, process_medians, triggering_processes, timestamp_str, detailed_info):
+    def create_full_report(self, processes, process_medians, triggering_processes, timestamp_str, detailed_info, historical_data=None):
         """Create detailed report with full process information including PID and command details"""
         timestamp_obj = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
         partition_path = (self.evidence_folder / f"{timestamp_obj.year:04d}" / 
@@ -449,24 +492,28 @@ class CPUMonitor:
             f.write(detailed_info)
             f.write("\n")
             
-            # Add historical data from circular buffers
+            # Add historical data from collected data
             f.write(f"\nHISTORICAL DATA (Last {self.monitoring_window} seconds):\n")
             f.write("=" * 80 + "\n")
-            current_time = time.time()
             
-            for process_name in self.process_names:
-                if process_name in self.process_readings:
-                    buffer = self.process_readings[process_name]
-                    if len(buffer) > 0:
-                        values = buffer.get_recent_values(self.monitoring_window, current_time)
-                        if values:
-                            f.write(f"\n{process_name}:\n")
-                            f.write(f"  Recent readings: {len(values)} samples\n")
-                            f.write(f"  Min CPU: {min(values):.1f}%\n")
-                            f.write(f"  Max CPU: {max(values):.1f}%\n")
-                            f.write(f"  Average CPU: {sum(values)/len(values):.1f}%\n")
-                            f.write(f"  Median CPU: {statistics.median(values):.1f}%\n")
-                            f.write(f"  P95 CPU: {statistics.quantiles(values, n=100)[94]:.1f}%\n")
+            if historical_data:
+                for process_name in self.process_names:
+                    if process_name in historical_data:
+                        data = historical_data[process_name]
+                        f.write(f"\n{process_name}:\n")
+                        f.write(f"  Recent readings: {data['count']} samples\n")
+                        f.write(f"  Min CPU: {data['min']:.1f}%\n")
+                        f.write(f"  Max CPU: {data['max']:.1f}%\n")
+                        f.write(f"  Average CPU: {data['avg']:.1f}%\n")
+                        f.write(f"  Median CPU: {data['median']:.1f}%\n")
+                        percentile_key = f"p{self.percentile}"
+                        if percentile_key in data:
+                            f.write(f"  P{self.percentile} CPU: {data[percentile_key]:.1f}%\n")
+                    else:
+                        f.write(f"\n{process_name}:\n")
+                        f.write(f"  No historical data available\n")
+            else:
+                f.write("No historical data available (immediate report mode)\n")
 
             f.write(f"\n" + "="*80 + "\n")
             f.write(f"Report generated by CPU Monitor v1.0\n")
@@ -568,6 +615,27 @@ class CPUMonitor:
                         count = len(processes.get(process_name, []))
                         logging.warning(f"  {process_name}: {percentile_value:.1f}% p{self.percentile} ({count} instances)")
                     
+                    # Collect historical data BEFORE clearing buffers
+                    historical_data = {}
+                    for process_name in self.process_names:
+                        if process_name in self.process_readings:
+                            buffer = self.process_readings[process_name]
+                            if len(buffer) > 0:
+                                values = buffer.get_recent_values(self.monitoring_window, timestamp)
+                                if values:
+                                    historical_data[process_name] = {
+                                        'values': values,
+                                        'count': len(values),
+                                        'min': min(values),
+                                        'max': max(values),
+                                        'avg': sum(values) / len(values),
+                                        'median': statistics.median(values)
+                                    }
+                                    if len(values) >= 5:
+                                        historical_data[process_name][f"p{self.percentile}"] = statistics.quantiles(values, n=100)[self.percentile - 1]
+                                    else:
+                                        historical_data[process_name][f"p{self.percentile}"] = max(values)
+
                     # Save evidence (both minimal and full reports)
                     detailed_info = self.get_detailed_cpu_info()
                     json_path = self.save_cpu_data_minimal(processes, process_percentiles, 
@@ -575,7 +643,7 @@ class CPUMonitor:
                     report_path = self.create_minimal_report(processes, process_percentiles, 
                                                            triggering_processes, timestamp_str)
                     full_report_path = self.create_full_report(processes, process_percentiles, 
-                                                             triggering_processes, timestamp_str, detailed_info)
+                                                             triggering_processes, timestamp_str, detailed_info, historical_data)
                     
                     logging.warning(f"Evidence: {json_path}, {report_path}")
                     logging.warning(f"Full report: {full_report_path}")
