@@ -96,6 +96,7 @@ def load_config(config_path="config.json"):
         "cpu_threshold": 95.0,
         "check_interval": 10,
         "monitoring_window": 300,
+        "percentile": 10,
         "evidence_folder": "cpu_evidence",
         "log_file": "cpu_monitor.log"
     }
@@ -138,7 +139,7 @@ class CPUMonitor:
     """Ultra-lightweight CPU monitor with minimal memory usage"""
     __slots__ = ('config_path', 'config_last_modified', 'process_readings', 
                  'process_window_start', 'config', 'process_names', 'cpu_threshold',
-                 'check_interval', 'monitoring_window', 'evidence_folder', 'log_file',
+                 'check_interval', 'monitoring_window', 'percentile', 'evidence_folder', 'log_file',
                  'max_readings', '_process_name_cache', '_weak_refs')
     
     def __init__(self, config_path="config.json"):
@@ -171,6 +172,7 @@ class CPUMonitor:
                 self.cpu_threshold = float(self.config["cpu_threshold"])
                 self.check_interval = int(self.config["check_interval"])
                 self.monitoring_window = int(self.config["monitoring_window"])
+                self.percentile = int(self.config["percentile"])
                 self.evidence_folder = Path(self.config["evidence_folder"])
                 self.evidence_folder.mkdir(exist_ok=True)
                 self.log_file = self.config["log_file"]
@@ -512,8 +514,8 @@ class CPUMonitor:
                     if self.process_window_start[process_name] is None:
                         self.process_window_start[process_name] = timestamp
                 
-                # Calculate P10 values and check thresholds
-                process_p10s = {}
+                # Calculate percentile values and check thresholds
+                process_percentiles = {}
                 triggering_processes = []
                 
                 for process_name in self.process_names:
@@ -526,21 +528,21 @@ class CPUMonitor:
                             values = buffer.get_recent_values(self.monitoring_window, timestamp)
                             
                             if len(values) >= 10:  # Need minimum readings
-                                # P10 means 90% of time CPU was above this value
-                                p10_cpu = statistics.quantiles(values, n=100)[9]
-                                process_p10s[process_name] = p10_cpu
+                                # Calculate configured percentile
+                                percentile_cpu = statistics.quantiles(values, n=100)[self.percentile - 1]
+                                process_percentiles[process_name] = percentile_cpu
                                 
-                                if p10_cpu >= self.cpu_threshold:
+                                if percentile_cpu >= self.cpu_threshold:
                                     triggering_processes.append(process_name)
                             else:
-                                process_p10s[process_name] = 0.0
+                                process_percentiles[process_name] = 0.0
                         else:
                             # Still in monitoring window
                             values = buffer.get_values()
                             if values:
-                                process_p10s[process_name] = statistics.quantiles(values, n=100)[9]
+                                process_percentiles[process_name] = statistics.quantiles(values, n=100)[self.percentile - 1]
                             else:
-                                process_p10s[process_name] = 0.0
+                                process_percentiles[process_name] = 0.0
                 
                 # Handle alerts
                 if triggering_processes:
@@ -548,17 +550,17 @@ class CPUMonitor:
                     
                     logging.warning(f"CPU ALERT: {len(triggering_processes)} processes over {self.cpu_threshold}%")
                     for process_name in triggering_processes:
-                        p10_value = process_p10s[process_name]
+                        percentile_value = process_percentiles[process_name]
                         count = len(processes.get(process_name, []))
-                        logging.warning(f"  {process_name}: {p10_value:.1f}% p10 ({count} instances)")
+                        logging.warning(f"  {process_name}: {percentile_value:.1f}% p{self.percentile} ({count} instances)")
                     
                     # Save evidence (both minimal and full reports)
                     detailed_info = self.get_detailed_cpu_info()
-                    json_path = self.save_cpu_data_minimal(processes, process_p10s, 
+                    json_path = self.save_cpu_data_minimal(processes, process_percentiles, 
                                                          triggering_processes, detailed_info, timestamp_str)
-                    report_path = self.create_minimal_report(processes, process_p10s, 
+                    report_path = self.create_minimal_report(processes, process_percentiles, 
                                                            triggering_processes, timestamp_str)
-                    full_report_path = self.create_full_report(processes, process_p10s, 
+                    full_report_path = self.create_full_report(processes, process_percentiles, 
                                                              triggering_processes, timestamp_str, detailed_info)
                     
                     logging.warning(f"Evidence: {json_path}, {report_path}")
