@@ -33,6 +33,19 @@ chmod 644 "$LAUNCHAGENTS_DIR/$PLIST_FILE"
 # Make the Python script executable
 chmod +x "$SCRIPT_DIR/run_cpu_anlayser.py"
 
+# Read configuration values from config.json
+CONFIG_FILE="$SCRIPT_DIR/config.json"
+if [ -f "$CONFIG_FILE" ]; then
+    CPU_THRESHOLD=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['cpu_threshold'])" 2>/dev/null || echo "95.0")
+    MONITORING_WINDOW=$(python3 -c "import json; print(int(json.load(open('$CONFIG_FILE'))['monitoring_window'])/60)" 2>/dev/null || echo "10")
+    CHECK_INTERVAL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['check_interval'])" 2>/dev/null || echo "10")
+else
+    # Default values if config.json doesn't exist
+    CPU_THRESHOLD="95.0"
+    MONITORING_WINDOW="10"
+    CHECK_INTERVAL="10"
+fi
+
 # Load the service
 echo "🚀 Starting CPU Monitor service..."
 launchctl load "$LAUNCHAGENTS_DIR/$PLIST_FILE"
@@ -54,8 +67,8 @@ if launchctl list | grep -q "$SERVICE_NAME"; then
     echo "🔍 Monitor Status:"
     echo "   - The service will automatically start at login"
     echo "   - It runs in the background with low CPU priority"
-    echo "   - Status updates are logged every 5 minutes"
-    echo "   - Alerts trigger when median CPU > 95% over 5 minutes"
+    echo "   - Processes monitored every ${CHECK_INTERVAL} seconds"
+    echo "   - Alerts trigger when p95 CPU > ${CPU_THRESHOLD}% over ${MONITORING_WINDOW} minutes"
     echo ""
     echo "📝 Management Commands:"
     echo "   - Check status: launchctl list | grep $SERVICE_NAME"

@@ -92,7 +92,7 @@ def load_config(config_path="config.json"):
     """Load configuration with minimal memory footprint"""
     default_config = {
         "process_names": ["java", "Docker", "Virtual Machine Service for Docker", 
-                         "IntelliJ IDEA", "Google Chrome", "Safari"],
+                         "IntelliJ IDEA", "Google Chrome", "Safari", "WindowServer"],
         "cpu_threshold": 95.0,
         "check_interval": 10,
         "monitoring_window": 300,
@@ -103,13 +103,31 @@ def load_config(config_path="config.json"):
     try:
         with open(config_path, 'r') as f:
             config = json.load(f)
-        # Intern process names to save memory
-        if 'process_names' in config:
-            config['process_names'] = [intern_string(name) for name in config['process_names']]
-        # Merge with defaults
+        
+        # Handle process names merging
+        if 'process_names' in config and config['process_names']:
+            # Start with config process names
+            config_processes = [intern_string(name) for name in config['process_names']]
+            
+            # Create a set for efficient duplicate checking (case-insensitive)
+            existing_processes_lower = {name.lower() for name in config_processes}
+            
+            # Add default processes that are not already present (case-insensitive comparison)
+            for default_process in default_config['process_names']:
+                if default_process.lower() not in existing_processes_lower:
+                    config_processes.append(intern_string(default_process))
+                    existing_processes_lower.add(default_process.lower())
+            
+            config['process_names'] = config_processes
+        else:
+            # If no process_names in config or it's empty, use defaults
+            config['process_names'] = [intern_string(name) for name in default_config['process_names']]
+        
+        # Merge other default values for missing keys
         for key, value in default_config.items():
             if key not in config:
                 config[key] = value
+        
         return config
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logging.warning(f"Could not load config {config_path}: {e}. Using defaults.")
@@ -353,6 +371,107 @@ class CPUMonitor:
         
         return str(report_path)
     
+    def create_full_report(self, processes, process_medians, triggering_processes, timestamp_str, detailed_info):
+        """Create detailed report with full process information including PID and command details"""
+        timestamp_obj = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
+        partition_path = (self.evidence_folder / f"{timestamp_obj.year:04d}" / 
+                         f"{timestamp_obj.month:02d}" / f"{timestamp_obj.day:02d}" / 
+                         f"{timestamp_obj.hour:02d}")
+        partition_path.mkdir(parents=True, exist_ok=True)
+        
+        report_path = partition_path / f"full_report_{timestamp_str}.txt"
+        
+        with open(report_path, 'w') as f:
+            f.write("="*80 + "\n")
+            f.write(f"DETAILED CPU MONITORING REPORT\n")
+            f.write(f"Generated: {datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Alert Time: {timestamp_str}\n")
+            f.write("="*80 + "\n\n")
+            
+            f.write(f"CONFIGURATION:\n")
+            f.write(f"  CPU Threshold: {self.cpu_threshold}%\n")
+            f.write(f"  Monitoring Window: {self.monitoring_window} seconds\n")
+            f.write(f"  Check Interval: {self.check_interval} seconds\n")
+            f.write(f"  Monitored Processes: {', '.join(self.process_names)}\n\n")
+            
+            if triggering_processes:
+                f.write(f"ALERT SUMMARY:\n")
+                f.write(f"  {len(triggering_processes)} process(es) exceeded {self.cpu_threshold}% CPU threshold\n\n")
+                
+                f.write("ALERTING PROCESSES (Detailed):\n")
+                f.write("-" * 80 + "\n")
+                for process_name in triggering_processes:
+                    median = process_medians.get(process_name, 0)
+                    instances = processes.get(process_name, [])
+                    f.write(f"\nProcess: {process_name}\n")
+                    f.write(f"  Median CPU Usage: {median:.2f}%\n")
+                    f.write(f"  Number of Instances: {len(instances)}\n")
+                    
+                    if instances:
+                        f.write(f"  Process Details:\n")
+                        # Sort instances by CPU usage (highest first)
+                        sorted_instances = sorted(instances, key=lambda x: x['cpu'], reverse=True)
+                        for i, instance in enumerate(sorted_instances, 1):
+                            f.write(f"    [{i}] PID: {instance['pid']:<8} CPU: {instance['cpu']:>6.1f}%\n")
+                            f.write(f"        Command: {instance['command']}\n")
+                    f.write("-" * 80 + "\n")
+            
+            f.write(f"\nALL MONITORED PROCESSES:\n")
+            f.write("=" * 80 + "\n")
+            
+            for process_name in self.process_names:
+                instances = processes.get(process_name, [])
+                median = process_medians.get(process_name, 0)
+                
+                f.write(f"\nProcess: {process_name}\n")
+                if instances:
+                    f.write(f"  Status: ACTIVE\n")
+                    f.write(f"  Median CPU Usage: {median:.2f}%\n")
+                    f.write(f"  Number of Instances: {len(instances)}\n")
+                    f.write(f"  Process Details:\n")
+                    
+                    # Sort instances by CPU usage (highest first)
+                    sorted_instances = sorted(instances, key=lambda x: x['cpu'], reverse=True)
+                    for i, instance in enumerate(sorted_instances, 1):
+                        f.write(f"    [{i}] PID: {instance['pid']:<8} CPU: {instance['cpu']:>6.1f}%\n")
+                        f.write(f"        Command: {instance['command']}\n")
+                else:
+                    f.write(f"  Status: NOT DETECTED\n")
+                    f.write(f"  CPU Usage: 0.0%\n")
+                f.write("-" * 40 + "\n")
+            
+            f.write(f"\nSYSTEM INFORMATION:\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"Top CPU Processes (from system):\n")
+            f.write(detailed_info)
+            f.write("\n")
+            
+            # Add historical data from circular buffers
+            f.write(f"\nHISTORICAL DATA (Last {self.monitoring_window} seconds):\n")
+            f.write("=" * 80 + "\n")
+            current_time = time.time()
+            
+            for process_name in self.process_names:
+                if process_name in self.process_readings:
+                    buffer = self.process_readings[process_name]
+                    if len(buffer) > 0:
+                        values = buffer.get_recent_values(self.monitoring_window, current_time)
+                        if values:
+                            f.write(f"\n{process_name}:\n")
+                            f.write(f"  Recent readings: {len(values)} samples\n")
+                            f.write(f"  Min CPU: {min(values):.1f}%\n")
+                            f.write(f"  Max CPU: {max(values):.1f}%\n")
+                            f.write(f"  Average CPU: {sum(values)/len(values):.1f}%\n")
+                            f.write(f"  Median CPU: {statistics.median(values):.1f}%\n")
+                            f.write(f"  P95 CPU: {statistics.quantiles(values, n=100)[94]:.1f}%\n")
+
+            f.write(f"\n" + "="*80 + "\n")
+            f.write(f"Report generated by CPU Monitor v1.0\n")
+            f.write(f"End of Report\n")
+            f.write("="*80 + "\n")
+        
+        return str(report_path)
+    
     def monitor(self):
         """Ultra-lightweight monitoring loop"""
         logging.info(f"Starting lightweight CPU monitor for {len(self.process_names)} processes")
@@ -406,8 +525,9 @@ class CPUMonitor:
                             # Get values within monitoring window
                             values = buffer.get_recent_values(self.monitoring_window, timestamp)
                             
-                            if len(values) >= 3:  # Need minimum readings
-                                median_cpu = statistics.median(values)
+                            if len(values) >= 10:  # Need minimum readings
+                                # median_cpu = statistics.median(values)
+                                median_cpu = statistics.quantiles(values, n=100)[94]
                                 process_medians[process_name] = median_cpu
                                 
                                 if median_cpu >= self.cpu_threshold:
@@ -418,7 +538,8 @@ class CPUMonitor:
                             # Still in monitoring window
                             values = buffer.get_values()
                             if values:
-                                process_medians[process_name] = statistics.median(values)
+                                # process_medians[process_name] = statistics.median(values)
+                                process_medians[process_name] = statistics.quantiles(values, n=100)[94]
                             else:
                                 process_medians[process_name] = 0.0
                 
@@ -432,14 +553,17 @@ class CPUMonitor:
                         count = len(processes.get(process_name, []))
                         logging.warning(f"  {process_name}: {median:.1f}% ({count} instances)")
                     
-                    # Save minimal evidence
+                    # Save evidence (both minimal and full reports)
                     detailed_info = self.get_detailed_cpu_info()
                     json_path = self.save_cpu_data_minimal(processes, process_medians, 
                                                          triggering_processes, detailed_info, timestamp_str)
                     report_path = self.create_minimal_report(processes, process_medians, 
                                                            triggering_processes, timestamp_str)
+                    full_report_path = self.create_full_report(processes, process_medians, 
+                                                             triggering_processes, timestamp_str, detailed_info)
                     
                     logging.warning(f"Evidence: {json_path}, {report_path}")
+                    logging.warning(f"Full report: {full_report_path}")
                     
                     # Reset monitoring windows for alerting processes
                     for process_name in triggering_processes:
@@ -466,8 +590,76 @@ class CPUMonitor:
                 logging.error(f"Error: {e}")
                 time.sleep(self.check_interval)
 
+def generate_full_report_now():
+    """Generate a full report with current system state"""
+    monitor = CPUMonitor()
+    
+    print("Generating full CPU report...")
+    
+    # Get current process data
+    processes, timestamp = monitor.get_process_cpu_usage()
+    detailed_info = monitor.get_detailed_cpu_info()
+    
+    # Calculate current medians (simplified for immediate report)
+    process_medians = {}
+    for process_name in monitor.process_names:
+        if process_name in processes:
+            cpu_values = [instance['cpu'] for instance in processes[process_name]]
+            if cpu_values:
+                # process_medians[process_name] = statistics.median(cpu_values)
+                process_medians[process_name] = statistics.quantiles(cpu_values, n=100)[94]
+            else:
+                process_medians[process_name] = 0.0
+        else:
+            process_medians[process_name] = 0.0
+    
+    # Find processes over threshold
+    triggering_processes = [name for name, median in process_medians.items() 
+                          if median >= monitor.cpu_threshold]
+    
+    # Generate timestamp
+    timestamp_str = datetime.fromtimestamp(timestamp).strftime("%Y%m%d_%H%M%S")
+    
+    # Create full report
+    full_report_path = monitor.create_full_report(processes, process_medians, 
+                                                triggering_processes, timestamp_str, detailed_info)
+    
+    print(f"Full report generated: {full_report_path}")
+    
+    # Also show summary
+    print(f"\nSummary:")
+    print(f"  Monitored processes: {len(monitor.process_names)}")
+    print(f"  Active processes: {len([name for name in monitor.process_names if name in processes])}")
+    print(f"  Processes over {monitor.cpu_threshold}% threshold: {len(triggering_processes)}")
+    
+    if triggering_processes:
+        print(f"  Alert processes:")
+        for process_name in triggering_processes:
+            median = process_medians[process_name]
+            count = len(processes.get(process_name, []))
+            print(f"    {process_name}: {median:.1f}% ({count} instances)")
+    
+    return full_report_path
+
 def main():
     """Lightweight entry point"""
+    import sys
+    
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--full-report" or sys.argv[1] == "-f":
+            # Generate full report immediately and exit
+            generate_full_report_now()
+            return
+        elif sys.argv[1] == "--help" or sys.argv[1] == "-h":
+            print("CPU Monitor - Process monitoring tool")
+            print("\nUsage:")
+            print("  python run_cpu_anlayser.py           # Start monitoring")
+            print("  python run_cpu_anlayser.py -f        # Generate full report now")
+            print("  python run_cpu_anlayser.py --full-report  # Generate full report now")
+            print("  python run_cpu_anlayser.py -h        # Show this help")
+            return
+    
     # Setup minimal logging
     logging.basicConfig(
         level=logging.WARNING,
@@ -483,6 +675,7 @@ def main():
     print(f"Interval: {monitor.check_interval}s")
     print(f"Window: {monitor.monitoring_window}s")
     print("Press Ctrl+C to stop")
+    print("\nTip: Use 'python run_cpu_anlayser.py -f' to generate a full report anytime")
     
     monitor.monitor()
 
