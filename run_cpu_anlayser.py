@@ -599,11 +599,6 @@ class CPUMonitor:
                             process_percentiles[process_name] = 0.0
                             logging.info(f"  {process_name}: Insufficient data ({len(values)} samples)")
                     
-                    # Reset monitoring windows for all completed processes (whether they triggered or not)
-                    for process_name in completed_processes:
-                        self.process_readings[process_name].clear()
-                        self.process_window_start[process_name] = timestamp
-                        logging.info(f"  Reset monitoring window for {process_name}")
                 
                 # Handle alerts
                 if triggering_processes:
@@ -615,7 +610,7 @@ class CPUMonitor:
                         count = len(processes.get(process_name, []))
                         logging.warning(f"  {process_name}: {percentile_value:.1f}% p{self.percentile} ({count} instances)")
                     
-                    # Collect historical data BEFORE clearing buffers
+                    # Collect historical data BEFORE clearing buffers - collect from ALL processes, not just completed ones
                     historical_data = {}
                     for process_name in self.process_names:
                         if process_name in self.process_readings:
@@ -654,6 +649,15 @@ class CPUMonitor:
                         self.process_window_start[process_name] = timestamp
                     
                     last_status_log = current_time
+                
+                # Reset monitoring windows for all completed processes (whether they triggered or not)
+                # This was moved AFTER the alert handling to preserve historical data
+                if window_complete:
+                    for process_name in completed_processes:
+                        if process_name not in triggering_processes:  # Don't clear twice
+                            self.process_readings[process_name].clear()
+                            self.process_window_start[process_name] = timestamp
+                            logging.info(f"  Reset monitoring window for {process_name}")
                 
                 # Periodic status (less frequent)
                 if current_time - last_status_log >= status_interval:
