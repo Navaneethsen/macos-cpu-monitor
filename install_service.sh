@@ -68,7 +68,7 @@ if launchctl list | grep -q "$SERVICE_NAME"; then
     echo "   - The service will automatically start at login"
     echo "   - It runs in the background with low CPU priority"
     echo "   - Processes monitored every ${CHECK_INTERVAL} seconds"
-    echo "   - Alerts trigger when p95 CPU > ${CPU_THRESHOLD}% over ${MONITORING_WINDOW} minutes"
+    echo "   - Alerts trigger when p10 CPU > ${CPU_THRESHOLD}% over ${MONITORING_WINDOW} minutes"
     echo ""
     echo "📝 Management Commands:"
     echo "   - Check status: launchctl list | grep $SERVICE_NAME"

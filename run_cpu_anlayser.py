@@ -512,8 +512,8 @@ class CPUMonitor:
                     if self.process_window_start[process_name] is None:
                         self.process_window_start[process_name] = timestamp
                 
-                # Calculate medians and check thresholds
-                process_medians = {}
+                # Calculate P10 values and check thresholds
+                process_p10s = {}
                 triggering_processes = []
                 
                 for process_name in self.process_names:
@@ -526,22 +526,21 @@ class CPUMonitor:
                             values = buffer.get_recent_values(self.monitoring_window, timestamp)
                             
                             if len(values) >= 10:  # Need minimum readings
-                                # median_cpu = statistics.median(values)
-                                median_cpu = statistics.quantiles(values, n=100)[94]
-                                process_medians[process_name] = median_cpu
+                                # P10 means 90% of time CPU was above this value
+                                p10_cpu = statistics.quantiles(values, n=100)[9]
+                                process_p10s[process_name] = p10_cpu
                                 
-                                if median_cpu >= self.cpu_threshold:
+                                if p10_cpu >= self.cpu_threshold:
                                     triggering_processes.append(process_name)
                             else:
-                                process_medians[process_name] = 0.0
+                                process_p10s[process_name] = 0.0
                         else:
                             # Still in monitoring window
                             values = buffer.get_values()
                             if values:
-                                # process_medians[process_name] = statistics.median(values)
-                                process_medians[process_name] = statistics.quantiles(values, n=100)[94]
+                                process_p10s[process_name] = statistics.quantiles(values, n=100)[9]
                             else:
-                                process_medians[process_name] = 0.0
+                                process_p10s[process_name] = 0.0
                 
                 # Handle alerts
                 if triggering_processes:
@@ -549,17 +548,17 @@ class CPUMonitor:
                     
                     logging.warning(f"CPU ALERT: {len(triggering_processes)} processes over {self.cpu_threshold}%")
                     for process_name in triggering_processes:
-                        median = process_medians[process_name]
+                        p10_value = process_p10s[process_name]
                         count = len(processes.get(process_name, []))
-                        logging.warning(f"  {process_name}: {median:.1f}% ({count} instances)")
+                        logging.warning(f"  {process_name}: {p10_value:.1f}% p10 ({count} instances)")
                     
                     # Save evidence (both minimal and full reports)
                     detailed_info = self.get_detailed_cpu_info()
-                    json_path = self.save_cpu_data_minimal(processes, process_medians, 
+                    json_path = self.save_cpu_data_minimal(processes, process_p10s, 
                                                          triggering_processes, detailed_info, timestamp_str)
-                    report_path = self.create_minimal_report(processes, process_medians, 
+                    report_path = self.create_minimal_report(processes, process_p10s, 
                                                            triggering_processes, timestamp_str)
-                    full_report_path = self.create_full_report(processes, process_medians, 
+                    full_report_path = self.create_full_report(processes, process_p10s, 
                                                              triggering_processes, timestamp_str, detailed_info)
                     
                     logging.warning(f"Evidence: {json_path}, {report_path}")
