@@ -9,7 +9,7 @@ A lightweight background service for macOS that monitors specific processes for 
 - **Background Operation**: Runs silently in the background with minimal CPU usage
 - **Auto-Start**: Automatically starts at login
 - **Window-Based Detection**: Uses configurable monitoring windows to detect sustained high CPU usage
-- **Configurable Percentile Analysis**: Uses configurable percentiles (P10, P25, P50, etc.) to avoid false positives
+- **Configurable Percentage Analysis**: Uses configurable percentage thresholds to detect sustained high CPU usage
 - **JSON Configuration**: All settings configurable via `config.json`
 - **Comprehensive Evidence**: Captures detailed JSON data, minimal reports, and full reports when alerts trigger
 - **Memory Optimized**: Ultra-lightweight design with circular buffers and minimal memory footprint
@@ -65,7 +65,7 @@ All configuration is managed through `config.json`:
   "cpu_threshold": 95.0,
   "check_interval": 10,
   "monitoring_window": 600,
-  "percentile": 10,
+  "percentage": 85,
   "evidence_folder": "cpu_evidence",
   "log_file": "cpu_monitor.log"
 }
@@ -77,7 +77,7 @@ All configuration is managed through `config.json`:
 - **`cpu_threshold`**: CPU percentage threshold (default: 95.0%)
 - **`check_interval`**: Seconds between CPU checks (default: 10 seconds)
 - **`monitoring_window`**: Window duration in seconds for analysis (default: 600 = 10 minutes)
-- **`percentile`**: Percentile to use for threshold detection (default: 10 = P10)
+- **`percentage`**: Percentage of readings that must exceed threshold to trigger alert (default: 85%)
 - **`evidence_folder`**: Directory for storing evidence files
 - **`log_file`**: Main log file name
 
@@ -95,8 +95,8 @@ python update_config.py threshold 80
 # Update monitoring window (in seconds)
 python update_config.py window 900
 
-# Update percentile (1-99)
-python update_config.py percentile 25
+# Update percentage (1-99)
+python update_config.py percentage 85
 
 # Update check interval
 python update_config.py interval 15
@@ -115,19 +115,19 @@ python update_config.py remove-process "old_process"
 1. **Sample Collection**: Every 10 seconds (configurable), collect CPU usage for all monitored processes
 2. **Global Window**: Maintain a monitoring window (default: 10 minutes) for each process
 3. **Window Completion**: When a monitoring window completes, evaluate all processes
-4. **Percentile Analysis**: Calculate the configured percentile (default: P10) for CPU usage during the window
-5. **Threshold Check**: Alert if percentile value exceeds the CPU threshold
+4. **Percentage Analysis**: Count how many readings exceed the CPU threshold during the window
+5. **Threshold Check**: Alert if percentage of readings above threshold meets the configured percentage
 6. **Evidence Generation**: Create reports only when processes exceed thresholds
 7. **Window Reset**: Reset monitoring windows and continue
 
-### Percentile Explanation
+### Percentage Explanation
 
-- **P10 (default)**: Alerts when CPU > threshold for 90% of the monitoring window
-- **P25**: Alerts when CPU > threshold for 75% of the monitoring window  
-- **P50 (median)**: Alerts when CPU > threshold for 50% of the monitoring window
-- **P75**: Alerts when CPU > threshold for 25% of the monitoring window
+- **15% (strict)**: Alerts when CPU > threshold for at least 15% of readings in the window
+- **50% (balanced)**: Alerts when CPU > threshold for at least 50% of readings in the window
+- **85% (lenient)**: Alerts when CPU > threshold for at least 85% of readings in the window
 
-Lower percentiles = more strict monitoring (sustained high usage required)
+Lower percentages = more sensitive monitoring (fewer high readings needed to trigger alert)
+Higher percentages = more strict monitoring (sustained high usage required)
 
 ### Memory Optimization
 
@@ -241,35 +241,35 @@ The service is optimized for minimal system impact:
 
 ## Monitoring Examples
 
-### Example 1: Strict Monitoring (P10)
+### Example 1: Sensitive Monitoring (15%)
 ```json
 {
   "cpu_threshold": 95.0,
   "monitoring_window": 600,
-  "percentile": 10
+  "percentage": 15
 }
 ```
-Alerts when CPU > 95% for 90% of 10 minutes (9 minutes of high usage)
+Alerts when CPU > 95% for at least 15% of readings over 10 minutes (9+ readings out of 60)
 
-### Example 2: Balanced Monitoring (P25)
+### Example 2: Balanced Monitoring (50%)
 ```json
 {
   "cpu_threshold": 90.0,
   "monitoring_window": 300,
-  "percentile": 25
+  "percentage": 50
 }
 ```
-Alerts when CPU > 90% for 75% of 5 minutes (3.75 minutes of high usage)
+Alerts when CPU > 90% for at least 50% of readings over 5 minutes (15+ readings out of 30)
 
-### Example 3: Sensitive Monitoring (P50)
+### Example 3: Strict Monitoring (85%)
 ```json
 {
   "cpu_threshold": 80.0,
   "monitoring_window": 180,
-  "percentile": 50
+  "percentage": 85
 }
 ```
-Alerts when CPU > 80% for 50% of 3 minutes (1.5 minutes of high usage)
+Alerts when CPU > 80% for at least 85% of readings over 3 minutes (15+ readings out of 18)
 
 ## Troubleshooting
 
@@ -306,9 +306,9 @@ Alerts when CPU > 80% for 50% of 3 minutes (1.5 minutes of high usage)
    ps aux | grep "process_name"
    ```
 
-2. Lower the percentile for more sensitive detection:
+2. Lower the percentage for more sensitive detection:
    ```bash
-   python update_config.py percentile 50
+   python update_config.py percentage 85
    ```
 
 3. Check monitoring window completion in logs

@@ -96,7 +96,7 @@ def load_config(config_path="config.json"):
         "cpu_threshold": 95.0,
         "check_interval": 10,
         "monitoring_window": 300,
-        "percentile": 10,
+        "percentage": 85,
         "evidence_folder": "cpu_evidence",
         "log_file": "cpu_monitor.log"
     }
@@ -139,7 +139,7 @@ class CPUMonitor:
     """Ultra-lightweight CPU monitor with minimal memory usage"""
     __slots__ = ('config_path', 'config_last_modified', 'process_readings', 
                  'process_window_start', 'process_last_alert', 'config', 'process_names', 'cpu_threshold',
-                 'check_interval', 'monitoring_window', 'percentile', 'evidence_folder', 'log_file',
+                 'check_interval', 'monitoring_window', 'percentage', 'evidence_folder', 'log_file',
                  'max_readings', '_process_name_cache', '_weak_refs')
     
     def __init__(self, config_path="config.json"):
@@ -173,7 +173,7 @@ class CPUMonitor:
                 self.cpu_threshold = float(self.config["cpu_threshold"])
                 self.check_interval = int(self.config["check_interval"])
                 self.monitoring_window = int(self.config["monitoring_window"])
-                self.percentile = int(self.config["percentile"])
+                self.percentage = int(self.config["percentage"])
                 self.evidence_folder = Path(self.config["evidence_folder"])
                 self.evidence_folder.mkdir(exist_ok=True)
                 self.log_file = self.config["log_file"]
@@ -328,7 +328,7 @@ class CPUMonitor:
                         formatted_output += "-" * 60 + "\n"
                     elif line.strip():  # Process lines
                         # Limit line length to prevent very long output
-                        formatted_output += f"{line[:120]}\n"
+                        formatted_output += f"{line[:640]}\n"
                 
                 # Add system load information
                 try:
@@ -506,9 +506,9 @@ class CPUMonitor:
                         f.write(f"  Max CPU: {data['max']:.1f}%\n")
                         f.write(f"  Average CPU: {data['avg']:.1f}%\n")
                         f.write(f"  Median CPU: {data['median']:.1f}%\n")
-                        percentile_key = f"p{self.percentile}"
-                        if percentile_key in data:
-                            f.write(f"  P{self.percentile} CPU: {data[percentile_key]:.1f}%\n")
+                        pct_key = f"pct_above_{self.cpu_threshold}"
+                        if pct_key in data:
+                            f.write(f"  Readings above {self.cpu_threshold}%: {data[pct_key]:.1f}%\n")
                     else:
                         f.write(f"\n{process_name}:\n")
                         f.write(f"  No historical data available\n")
@@ -587,13 +587,16 @@ class CPUMonitor:
                         values = buffer.get_recent_values(self.monitoring_window, timestamp)
                         
                         if len(values) >= 10:  # Need minimum readings for statistical analysis
-                            # Calculate configured percentile
-                            percentile_cpu = statistics.quantiles(values, n=100)[self.percentile - 1]
-                            process_percentiles[process_name] = percentile_cpu
+                            # Count how many values exceed the threshold
+                            above_threshold = [val for val in values if val > self.cpu_threshold]
+                            percentage_above = (len(above_threshold) / len(values)) * 100
                             
-                            logging.info(f"  {process_name}: P{self.percentile} = {percentile_cpu:.1f}% (threshold: {self.cpu_threshold}%)")
+                            # Store the percentage for reporting
+                            process_percentiles[process_name] = percentage_above
                             
-                            if percentile_cpu >= self.cpu_threshold:
+                            logging.info(f"  {process_name}: {percentage_above:.1f}% of readings above {self.cpu_threshold}% (required: {self.percentage}%)")
+                            
+                            if percentage_above >= self.percentage:
                                 triggering_processes.append(process_name)
                         else:
                             process_percentiles[process_name] = 0.0
@@ -604,11 +607,11 @@ class CPUMonitor:
                 if triggering_processes:
                     timestamp_str = datetime.fromtimestamp(timestamp).strftime("%Y%m%d_%H%M%S")
                     
-                    logging.warning(f"CPU ALERT: {len(triggering_processes)} processes over {self.cpu_threshold}%")
+                    logging.warning(f"CPU ALERT: {len(triggering_processes)} processes exceeded percentage threshold")
                     for process_name in triggering_processes:
-                        percentile_value = process_percentiles[process_name]
+                        percentage_value = process_percentiles[process_name]
                         count = len(processes.get(process_name, []))
-                        logging.warning(f"  {process_name}: {percentile_value:.1f}% p{self.percentile} ({count} instances)")
+                        logging.warning(f"  {process_name}: {percentage_value:.1f}% of readings above {self.cpu_threshold}% ({count} instances)")
                     
                     # Collect historical data BEFORE clearing buffers - collect from ALL processes, not just completed ones
                     historical_data = {}
@@ -626,10 +629,10 @@ class CPUMonitor:
                                         'avg': sum(values) / len(values),
                                         'median': statistics.median(values)
                                     }
-                                    if len(values) >= 5:
-                                        historical_data[process_name][f"p{self.percentile}"] = statistics.quantiles(values, n=100)[self.percentile - 1]
-                                    else:
-                                        historical_data[process_name][f"p{self.percentile}"] = max(values)
+                                    # Calculate percentage of readings above threshold for historical data
+                                    above_threshold_hist = [val for val in values if val > self.cpu_threshold]
+                                    percentage_above_hist = (len(above_threshold_hist) / len(values)) * 100
+                                    historical_data[process_name][f"pct_above_{self.cpu_threshold}"] = percentage_above_hist
 
                     # Save evidence (both minimal and full reports)
                     detailed_info = self.get_detailed_cpu_info()

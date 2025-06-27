@@ -1,0 +1,17 @@
+{
+  "process_names": [
+    "wdavdaemon_enterprise",
+    "com.vmware.carbonblack.appc-es-loader.appc-es-extension",
+    "com.cyberark.CyberArkEPMEndpointSecurityExtension",
+    "b9daemon",
+    "com.crowdstrike.falcon.Agent",
+    "epsext",
+    "JamfDaemon"
+  ],
+  "cpu_threshold": 95.0,
+  "check_interval": 10,
+  "monitoring_window": 600,
+  "percentage": 85,
+  "evidence_folder": "cpu_evidence",
+  "log_file": "cpu_monitor.log"
+}

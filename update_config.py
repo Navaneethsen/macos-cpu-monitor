@@ -37,7 +37,7 @@ def show_current_config(config_path="config.json"):
         print(f"CPU Threshold: {config['cpu_threshold']}%")
         print(f"Check Interval: {config['check_interval']}s")
         print(f"Monitoring Window: {config['monitoring_window']}s ({config['monitoring_window']//60} minutes)")
-        print(f"Percentile: P{config.get('percentile', 10)} ({100-config.get('percentile', 10)}% of time above threshold)")
+        print(f"Percentage: {config.get('percentage', 10)}% of readings must exceed threshold")
         print(f"Evidence Folder: {config['evidence_folder']}")
         print(f"Log File: {config['log_file']}")
 
@@ -65,13 +65,13 @@ def update_monitoring_window(new_window, config_path="config.json"):
         if save_config(config, config_path):
             print(f"Monitoring window updated to {new_window}s ({new_window//60} minutes)")
 
-def update_percentile(new_percentile, config_path="config.json"):
-    """Update percentile threshold"""
+def update_percentage(new_percentage, config_path="config.json"):
+    """Update percentage threshold"""
     config = load_config(config_path)
     if config:
-        config['percentile'] = int(new_percentile)
+        config['percentage'] = int(new_percentage)
         if save_config(config, config_path):
-            print(f"Percentile updated to P{new_percentile} ({100-new_percentile}% of time above threshold)")
+            print(f"Percentage updated to {new_percentage}% of readings must exceed threshold")
 
 def add_process(process_name, config_path="config.json"):
     """Add a process to monitor"""
@@ -105,7 +105,7 @@ def main():
         print("  python update_config.py threshold <value>              - Update CPU threshold (%)")
         print("  python update_config.py interval <seconds>             - Update check interval")
         print("  python update_config.py window <seconds>               - Update monitoring window")
-        print("  python update_config.py percentile <value>             - Update percentile (1-99)")
+        print("  python update_config.py percentage <value>             - Update percentage (1-99)")
         print("  python update_config.py add-process <name>             - Add process to monitor")
         print("  python update_config.py remove-process <name>          - Remove process from monitoring")
         print()
@@ -114,7 +114,7 @@ def main():
         print("  python update_config.py threshold 80")
         print("  python update_config.py interval 60")
         print("  python update_config.py window 600")
-        print("  python update_config.py percentile 25")
+        print("  python update_config.py percentage 85")
         print("  python update_config.py add-process 'new_daemon'")
         print("  python update_config.py remove-process 'old_process'")
         return
@@ -155,15 +155,15 @@ def main():
         except ValueError:
             print("Error: Invalid window value")
     
-    elif command == "percentile" and len(sys.argv) >= 3:
+    elif command == "percentage" and len(sys.argv) >= 3:
         try:
-            percentile = int(sys.argv[2])
-            if 1 <= percentile <= 99:
-                update_percentile(percentile, config_path)
+            percentage = int(sys.argv[2])
+            if 1 <= percentage <= 99:
+                update_percentage(percentage, config_path)
             else:
-                print("Error: Percentile must be between 1 and 99")
+                print("Error: Percentage must be between 1 and 99")
         except ValueError:
-            print("Error: Invalid percentile value")
+            print("Error: Invalid percentage value")
     
     elif command == "add-process" and len(sys.argv) >= 3:
         process_name = sys.argv[2]
