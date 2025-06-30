@@ -213,12 +213,13 @@ class CPUMonitor:
         return None
     
     def get_process_cpu_usage(self):
-        """Get CPU usage with minimal memory allocation"""
+        """Get CPU usage with minimal memory allocation and optimized filtering"""
         try:
-            # Use the original working ps command
+            # Use more targeted ps command to reduce output size
+            # Only get processes with CPU > 0.1% to reduce processing
             result = subprocess.run(
-                ["ps", "-A", "-o", "pid,pcpu,args"],  # Original working format
-                capture_output=True, text=True, check=True, timeout=10
+                ["ps", "-A", "-o", "pid,pcpu,comm", "-r"],  # Sort by CPU desc, shorter output
+                capture_output=True, text=True, check=True, timeout=5  # Reduced timeout
             )
             
             processes = {}
@@ -228,40 +229,45 @@ class CPUMonitor:
             if not result.stdout.strip():
                 return processes, current_time
             
-            # Process only lines that might contain our monitored processes
+            # Pre-compile monitored process names for faster matching
+            monitored_lower = tuple(name.lower() for name in self.process_names)
+            
+            # Process lines more efficiently
             lines = result.stdout.split('\n')[1:]  # Skip header
-            monitored_lower = [name.lower() for name in self.process_names]
             
             for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Quick check if line contains any monitored process name
-                line_lower = line.lower()
-                if not any(proc in line_lower for proc in monitored_lower):
+                if not line.strip():
                     continue
                 
                 parts = line.split(None, 2)
                 if len(parts) >= 3:
                     try:
-                        pid, cpu_str, command = parts
+                        pid_str, cpu_str, command = parts
                         cpu_val = float(cpu_str)
                         
-                        # Skip very low CPU to save memory (allow small values for monitoring)
+                        # Early exit for very low CPU - since ps is sorted, we can break
                         if cpu_val < 0.1:
-                            continue
+                            break  # All remaining processes will have even lower CPU
                         
-                        # Check if this matches any monitored process
-                        process_name = self._match_process_name(command)
-                        if process_name:
-                            if process_name not in processes:
-                                processes[process_name] = []
+                        # Quick check if command contains any monitored process name
+                        command_lower = command.lower()
+                        matched_process = None
+                        
+                        for proc_name in monitored_lower:
+                            if proc_name in command_lower:
+                                # Get original case process name
+                                matched_process = next(name for name in self.process_names 
+                                                     if name.lower() == proc_name)
+                                break
+                        
+                        if matched_process:
+                            if matched_process not in processes:
+                                processes[matched_process] = []
                             
-                            processes[process_name].append({
-                                'pid': int(pid),
+                            processes[matched_process].append({
+                                'pid': int(pid_str),
                                 'cpu': cpu_val,
-                                'command': intern_string(command)
+                                'command': intern_string(command[:100])  # Limit command length
                             })
                             
                     except (ValueError, IndexError):
@@ -406,7 +412,7 @@ class CPUMonitor:
             for process_name in triggering_processes:
                 median = process_medians.get(process_name, 0)
                 count = len(processes.get(process_name, []))
-                f.write(f"  {process_name}: {median:.1f}% ({count} instances)\n")
+                f.write(f"  {process_name}: {median:.1f}% of values above the threshold. ({count} instances)\n")
             
             f.write(f"\nAll processes:\n")
             for process_name in self.process_names:
@@ -523,13 +529,18 @@ class CPUMonitor:
         return str(report_path)
     
     def monitor(self):
-        """Ultra-lightweight monitoring loop"""
+        """Ultra-lightweight monitoring loop with optimized performance"""
         logging.info(f"Starting lightweight CPU monitor for {len(self.process_names)} processes")
         
         last_status_log = time.time()
         last_config_check = time.time()
+        last_gc = time.time()
         status_interval = 300  # 5 minutes
-        config_interval = 120   # 2 minutes
+        config_interval = 300   # 5 minutes (reduced frequency)
+        gc_interval = 600      # 10 minutes (garbage collection)
+        
+        # Pre-allocate variables to avoid repeated allocations
+        completed_processes = []
         
         # Force garbage collection to start clean
         gc.collect()
@@ -540,21 +551,28 @@ class CPUMonitor:
                 
                 # Check config less frequently to save CPU
                 if current_time - last_config_check >= config_interval:
-                    self.reload_config()
+                    if self.reload_config():
+                        # Only reinitialize if config actually changed
+                        self._initialize_buffers()
                     last_config_check = current_time
                 
                 processes, timestamp = self.get_process_cpu_usage()
                 
-                # Update readings for each process
+                # Skip processing if no monitored processes are active
+                if not processes:
+                    time.sleep(self.check_interval)
+                    continue
+                
+                # Update readings for each process (optimized)
                 for process_name, instances in processes.items():
                     if process_name not in self.process_readings:
                         self.process_readings[process_name] = CircularBuffer(self.max_readings)
                         self.process_window_start[process_name] = timestamp
                     
-                    # Use highest CPU instance for this process
-                    max_cpu = max(instance['cpu'] for instance in instances)
-                    max_pid = next(instance['pid'] for instance in instances 
-                                 if instance['cpu'] == max_cpu)
+                    # Use highest CPU instance for this process (optimized)
+                    max_instance = max(instances, key=lambda x: x['cpu'])
+                    max_cpu = max_instance['cpu']
+                    max_pid = max_instance['pid']
                     
                     self.process_readings[process_name].append(timestamp, max_cpu, max_pid)
                     
@@ -562,9 +580,9 @@ class CPUMonitor:
                     if self.process_window_start[process_name] is None:
                         self.process_window_start[process_name] = timestamp
                 
-                # Check if any monitoring window is complete for evaluation
+                # Check if any monitoring window is complete for evaluation (optimized)
+                completed_processes.clear()  # Reuse list
                 window_complete = False
-                completed_processes = []
                 
                 for process_name in self.process_names:
                     if process_name in self.process_readings:
@@ -662,14 +680,21 @@ class CPUMonitor:
                             self.process_window_start[process_name] = timestamp
                             logging.info(f"  Reset monitoring window for {process_name}")
                 
-                # Periodic status (less frequent)
+                # Periodic status and maintenance (less frequent)
                 if current_time - last_status_log >= status_interval:
                     active_count = sum(len(instances) for instances in processes.values())
                     logging.info(f"Status: {active_count} active processes monitored")
                     last_status_log = current_time
+                
+                # Periodic garbage collection (even less frequent)
+                if current_time - last_gc >= gc_interval:
+                    # Clear process name cache periodically to prevent memory growth
+                    if len(self._process_name_cache) > 1000:
+                        self._process_name_cache.clear()
                     
-                    # Force garbage collection periodically
+                    # Force garbage collection
                     gc.collect()
+                    last_gc = current_time
                 
                 time.sleep(self.check_interval)
                 
@@ -727,7 +752,7 @@ def generate_full_report_now():
         for process_name in triggering_processes:
             median = process_medians[process_name]
             count = len(processes.get(process_name, []))
-            print(f"    {process_name}: {median:.1f}% ({count} instances)")
+            print(f"    {process_name}: {median:.1f}% of values above the threshold. ({count} instances)")
     
     return full_report_path
 
