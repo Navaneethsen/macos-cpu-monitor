@@ -344,10 +344,7 @@ Create different configurations for different scenarios:
 
 ### Integration with Other Tools
 The JSON evidence files can be easily integrated with:
-- Log aggregation systems (ELK, Splunk)
 - Monitoring dashboards (Grafana)
-- Alerting systems (PagerDuty, Slack)
-- Security tools (SIEM systems)
 
 ## Support
 
