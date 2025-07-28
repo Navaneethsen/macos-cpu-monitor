@@ -1,12 +1,11 @@
 {
   "process_names": [
-    "wdavdaemon_enterprise",
-    "com.vmware.carbonblack.appc-es-loader.appc-es-extension",
-    "com.cyberark.CyberArkEPMEndpointSecurityExtension",
-    "b9daemon",
-    "com.crowdstrike.falcon.Agent",
-    "epsext",
-    "JamfDaemon"
+    "abcd_enterprise",
+    "silverbullet", 
+    "com.xyz.SecurityExtension",
+    "1234daemon",
+    "fryGPS"  
+    ... # Add more as needed
   ],
   "cpu_threshold": 95.0,
   "check_interval": 10,
